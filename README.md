@@ -1,6 +1,3 @@
-## Try it online!
-[Online bulk image cropper](https://www.catalog.guru/raw/image-cropping-tool.html)
-
 ## What is this?
 This is an in-browser HTML5 mass image cropping tool.
 The user loads a list of image and provides a desired size or aspect ratio.

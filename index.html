@@ -1,518 +1,854 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <!-- TODO: Analytics should go here if required. -->
-
-  <title>Online bulk image cropping tool (free &amp; open-source)</title>
-
-  <meta name="description" content="A free online (in-browser) tool to batch crop and resize images using a custom crop mask for each image. Download in a zip.">
-
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-
-  <!-- TODO: Link to your favicon or remove line. -->
-  <link rel="icon" href="/favicon.png">
-
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uikit@3.5.6/dist/css/uikit.min.css" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.11/cropper.min.css" integrity="sha512-NCJ1O5tCMq4DK670CblvRiob3bb5PAxJ7MALAz2cV40T9RgNMrJSAwJKy0oz20Wu7TDn9Z2WnveirOeHmpaIlA==" crossorigin="anonymous" />
-
-  <style>
-    .uk-container {
-      margin-top: 20px;
-      margin-bottom: 20px;
-    }
-
-    #image-cropper img {
-        display: block;
-        max-width: 100%;
-    }
-
-    #controls > div  {
-        display: inline-block;
-        vertical-align: bottom;
-        min-height: 64px;
-    }
-    #controls > div:first-child button {
-        border-left: none !important;
-    }
-    #controls {
-        background-color: #1e87f0;
-        color: white;
-    }
-    #controls button, #controls a {
-        min-height: 64px;
-        margin: 0;
-        margin-bottom: 0px;
-        border: none !important;
-        border-left: 1px solid white !important;
-        line-height: 64px;
-    }
-    #drophere {
-        height: 100px;
-        border: 2px dashed black;
-        margin: 20px 0;
-    }
-    #drophere div {
-        opacity: 0;
-        transition: opacity 2s;
-        box-sizing: border-box;
-        width: 100%;
-        height: 100px;
-        background-color: aquamarine;
-    }
-  </style>
-
-  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
-
-  <script src="https://cdn.jsdelivr.net/npm/uikit@3.5.6/dist/js/uikit.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/uikit@3.5.6/dist/js/uikit-icons.min.js"></script>
-
-  <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11"></script>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.11/cropper.min.js" integrity="sha512-FHa4dxvEkSR0LOFH/iFH0iSqlYHf/iTwLc5Ws/1Su1W90X0qnxFxciJimoue/zyOA/+Qz/XQmmKqjbubAAzpkA==" crossorigin="anonymous"></script>
-
-  <script>
-  (function() {
-    // TODO: Add optional sample images.
-    var sampleImages = [];
-    // sampleImages = ['bill-jelen-rocket.jpg', 'iulian-m-boat.jpg'];
-    var sampleImagesFolder = 'sample-images/';
-
-    $(document).ready(function() {
-      var cropper = null;
-      var w = new Worker('./zip-web-worker.js');
-
-      w.onmessage = function(e) {
-        var blob = new Blob([e.data.zip], { type: 'application/zip' });
-        cropapp.downloadUrl = URL.createObjectURL(blob);
-        cropapp.inProgress = false;
-      };
-
-      var cropapp = new Vue({
-        el: '#myapp',
-        data: {
-            aspectRatioWidth: 1200,
-            aspectRatioHeight: 1000,
-            sizeMode: 'atMost',
-            width: 1200,
-            height: 1000,
-            imageIndex: -1,
-            fileQueue: [],
-            cropWidth: 0,
-            cropHeight: 0,
-            downloadUrl: null,
-            inProgress: false,
-            readyCount: 0,
-            dropTimeout: null,
-            sampleImages: sampleImages,
-            sampleImagesFolder: sampleImagesFolder,
-            sampleImagesAvailable: 0
-        },
-        methods: {
-            isValidAspectRatio: function() {
-                var w = parseInt(this.aspectRatioWidth, 10);
-                var h = parseInt(this.aspectRatioHeight, 10);
-
-                return isFinite(w) && isFinite(h) && w > 0 && h > 0;
-            },
-            isValidSize: function() {
-                var w = parseInt(this.width, 10);
-                var h = parseInt(this.height, 10);
-
-                return isFinite(w) && isFinite(h) && w > 0 && h > 0;
-            },
-            haveImages: function() {
-                return this.fileQueue.length > 0;
-            },
-            isHavePrev: function() {
-                return this.imageIndex > 0;
-            },
-            isHaveNext: function() {
-                return this.haveImages() && this.imageIndex < this.fileQueue.length - 1;
-            },
-            isHaveFirst: function() {
-                return this.haveImages() && this.imageIndex >= 0;
-            },
-            sampleImagesLoaded: function() {
-              return this.sampleImages.length <= this.sampleImagesAvailable;
-            },
-            addSampleImage: function(url, existing) {
-                var upload = new XMLHttpRequest();
-                upload.responseType = 'blob';
-
-                upload.onload = function() {
-                  var blob = upload.response;
-                  cropapp.addFile(blob, existing, url);
-                  cropapp.sampleImagesAvailable++;
-                };
-
-                upload.open('GET', this.sampleImagesFolder + url, true);
-                upload.send();
-            },
-            addSampleImages: function(ev) {
-                ev.preventDefault();
-                if (this.sampleImagesAvailable > 0) {
-                  return;
-                }
-
-                var existing = this.createExistingSet();
-                for (var i = 0; i < this.sampleImages.length; i++) {
-                    this.addSampleImage(this.sampleImages[i], existing);
-                }
-            },
-            dragOver: function(ev) {
-                ev.preventDefault();
-            },
-            testAdd: function(file, existing) {
-                if (/(.jpg)|(.png)|(.gif)|(.jpeg)/.test(file.name.toLowerCase())) {
-                    cropapp.addFile(file, existing, file.name);
-                    $('#drophere div').css('opacity', 1);
-                    if (cropapp.dropTimeout) {
-                        clearTimeout(cropapp.dropTimeout);
-                    }
-                    cropapp.dropTimeout = setTimeout(function() {
-                        $('#drophere div').css('opacity', 0);
-                    }, 1000);
-                }
-            },
-            dropFiles: function(ev) {
-                ev.preventDefault();
-                var existing = cropapp.createExistingSet();
-
-                if (ev.dataTransfer.items) {
-                  // Use DataTransferItemList interface to access the file(s)
-                  for (var i = 0; i < ev.dataTransfer.items.length; i++) {
-                    if (ev.dataTransfer.items[i].kind === 'file') {
-                      var file = ev.dataTransfer.items[i].getAsFile();
-                      cropapp.testAdd(file, existing);
-                    }
-                  }
-                } else {
-                    // Use DataTransfer interface to access the file(s)
-                    for (var i = 0; i < ev.dataTransfer.files.length; i++) {
-                      var file = ev.dataTransfer.files[i];
-                      cropapp.testAdd(file, existing);
-                    }
-                }
-            },
-            addFile: function(file, existingSet, fileName) {
-              if (existingSet[fileName]) {
-                  return; // Do not allow duplicates.
-              }
-
-              this.fileQueue.push({ file: file, data: null, fileName: fileName });
-            },
-            createExistingSet: function() {
-                var existing = {};
-                for (var j = 0; j < cropapp.fileQueue.length; j++) {
-                    existing[cropapp.fileQueue[j].fileName] = true;
-                }
-                return existing;
-            },
-            updateFileQueue: function() {
-                var existing = this.createExistingSet();
-                var files = $('#files')[0].files;
-
-                for (var i = 0; i < files.length; i++) {
-                    cropapp.addFile(files[i], existing, files[i].name);
-                }
-            },
-            createZip: function() {
-                var onBlobSave = function() {
-                  var blobQueue = [];
-
-                  for (var i = 0; i < cropapp.fileQueue.length; i++) {
-                    if (cropapp.fileQueue[i].blob) {
-                        blobQueue.push({ blob: cropapp.fileQueue[i].blob, fileName: cropapp.fileQueue[i].fileName });
-                    }
-                  }
-
-                  for (var j = cropapp.fileQueue.length -1; j >= 0; j--) {
-                    if (cropapp.fileQueue[j].blob) {
-                        cropapp.fileQueue.splice(j, 1);
-                    }
-                  }
-
-                  cropapp.imageIndex = -1;
-                  cropapp.readyCount = 0;
-                  cropper.destroy();
-                  cropper = null;
-                  $('#image-cropper').empty();
-
-                  w.postMessage(blobQueue);
-                };
-
-                if (this.downloadUrl) {
-                    URL.revokeObjectURL(this.downloadUrl);
-                    this.downloadUrl = null;
-                }
-
-                this.inProgress = true;
-                this.processImage(onBlobSave);
-            },
-            prevImage: function() {
-               this.nextImage(-1);
-            },
-            processImage: function(cb) {
-                if (cropper) {
-                    var queueObj = this.fileQueue[this.imageIndex];
-
-                    var dt = cropper.getData();
-                    queueObj.data = dt;
-
-                    var cw, ch;
-                    if (this.sizeMode === 'atMost') {
-                       cw = Math.min(this.cropWidth, this.width);
-                       ch = Math.min(this.cropHeight, this.height);
-                    } else if (this.sizeMode === 'exact') {
-                       cw = this.width;
-                       ch = this.height;
-                    } else {
-                        cw = this.cropWidth;
-                        ch = this.cropHeight;
-                    }
-
-                    var isJpeg = /[^\.]*(\.jpg)|(\.jpeg)$/.test(queueObj.fileName.toLowerCase());
-                    cropapp.inProgress = true;
-
-                    var next = function(blob) {
-                      queueObj.blob = blob;
-                      cropapp.inProgress = false;
-                      if (cb) {
-                          cb();
-                      }
-                    };
-
-                    var canvas = cropper.getCroppedCanvas({
-                      width: cw,
-                      height: ch,
-                      /* Enable image smoothing if we are upsizing. */
-                      imageSmoothingEnabled: cropapp.sizeMode === 'exact' && (cropapp.cropWidth < cropapp.width || cropapp.cropHeight < cropapp.height),
-                      imageSmoothingQuality: 'low'
-                    });
-
-                    if (isJpeg) {
-                      canvas.toBlob(next, 'image/jpeg');
-                    } else {
-                      canvas.toBlob(next, 'image/png');
-                    }
-                }
-            },
-            nextImage: function(incr) {
-                this.processImage();
-
-                if (cropper) {
-                    cropper.destroy();
-                }
-
-                this.imageIndex += incr;
-                var imageFile = this.fileQueue[this.imageIndex].file;
-                var imageData = this.fileQueue[this.imageIndex].data;
-
-                if (!imageData && incr > 0) {
-                  this.readyCount++;
-                }
-
-                var fr = new FileReader();
-                var img = new Image();
-
-                fr.onload = function(e) {
-                  img.src = e.target.result;
-                }
-
-                img.onload = function() {
-                     cropper = new Cropper(img, {
-                        viewMode: 2,
-                        aspectRatio: cropapp.aspectRatioWidth / cropapp.aspectRatioHeight,
-                        data: imageData,
-                        crop: function(e) {
-                          cropapp.cropWidth = Math.floor(e.detail.width);
-                          cropapp.cropHeight = Math.floor(e.detail.height);
-                        },
-                        ready: function() {
-                          cropapp.inProgress = false;
-                        }
-                     });
-                }
-
-                cropapp.inProgress = true;
-                fr.readAsDataURL(imageFile);
-
-                $('#image-cropper').empty();
-                $('#image-cropper').append(img);
-            }
-        },
-        watch: {
-           width: function() {
-               this.aspectRatioWidth = this.width;
-               this.aspectRatioHeight = this.height;
-           },
-           height: function() {
-               this.aspectRatioWidth = this.width;
-               this.aspectRatioHeight = this.height;
-           }
-
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bulk Image Cropper - Fixed Position Mode</title>
+    
+    <!-- UIkit CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uikit@3.16.26/dist/css/uikit.min.css" />
+    
+    <!-- Cropper.js CSS -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cropperjs@1.5.13/dist/cropper.min.css">
+    
+    <style>
+        .cropper-container {
+            max-height: 70vh;
+            margin: 0 auto;
         }
-      });
-    });
-  })();
-  </script>
+        
+        .locked-indicator {
+            background: #ffd700;
+            color: #333;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            font-weight: bold;
+            text-align: center;
+        }
+        
+        .template-indicator {
+            background: #32d296;
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-bottom: 10px;
+        }
+        
+        .view-only-mode {
+            opacity: 0.8;
+            pointer-events: none;
+        }
+        
+        .validation-error {
+            background: #f0506e;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        
+        .image-counter {
+            font-size: 1.2em;
+            margin-bottom: 15px;
+        }
+        
+        .template-set {
+            border: 3px solid #32d296 !important;
+        }
+        
+        #image-to-crop {
+            max-width: 100%;
+            display: block;
+        }
+        
+        .cropper-view-box,
+        .cropper-face {
+            border-radius: 0;
+        }
+        
+        .controls-section {
+            background: #f8f8f8;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        
+        .nav-button {
+            min-width: 120px;
+        }
+        
+        .file-input-wrapper {
+            margin-bottom: 20px;
+        }
+    </style>
 </head>
 <body>
 
-  <!-- TODO: Add a nav menu back to your main site if you like. -->
-
-  <div class="uk-container">
-    <div class="uk-card uk-card-body uk-card-default uk-card-small uk-margin-top">
-      <div class="uk-card-header">
-        <h1 class="uk-card-title">In-browser bulk image cropping tool</h1>
-      </div>
-
-      <div class="uk-card-body">
-        <p>This free online tool allows you to mass crop images, using a custom crop mask for each image.</p>
-        <p>All the work is done in the browser, no images are uploaded to a server, and at the end you will
-           be able to download a zip file containing your cropped images.</p>
-        <p>Based on open-source software <a href="https://github.com/danfickle/bulk-image-cropper">available at Github</a>.</p>
-        <p>Known to work on:
-           <ul>
-               <li>Firefox (desktop)</li>
-               <li>Chrome (desktop, Android)</li>
-               <li>Safari (desktop, iOS, iPadOS)</li>
-               <li>Edge (desktop)</li>
-           </ul>
-        </p>
-        <p>Known <strong>not</strong> to work on:
-        <ul>
-            <li>Chrome (iOS, iPadOS) - Use Safari instead</li>
-        </ul>
-        </p>
-      </div>
+<div id="app" class="uk-container uk-container-large uk-padding">
+    
+    <!-- Header -->
+    <div class="uk-text-center uk-margin-large-bottom">
+        <h1 class="uk-heading-medium">Bulk Image Cropper</h1>
+        <p class="uk-text-lead">Set crop on first image, apply to all images automatically</p>
     </div>
-  </div>
-     
 
-
-
-  <div class="uk-container" id="myapp">
-    <div class="uk-card uk-card-body uk-card-default uk-card-small uk-margin-top">
-        <div v-if="haveImages()"  class="uk-card-badge uk-label uk-label-success"><span uk-icon="check"></span> Success: Scroll down</div>
-        <div v-if="!haveImages()" class="uk-card-badge uk-label uk-label-danger"><span uk-icon="lock"></span> Required</div>
-    
-        <div class="uk-card-header">
-          <h2 class="uk-card-title">1. Select images to crop / resize</h2>
+    <!-- File Input Section -->
+    <div class="file-input-wrapper uk-text-center" v-if="!images.length">
+        <div uk-form-custom="target: true">
+            <input type="file" multiple accept="image/*" @change="handleFileSelect">
+            <input class="uk-input uk-form-width-large" type="text" placeholder="Select images..." disabled>
         </div>
-    
-        <div class="uk-card-body">
-            <p>Select as many images as you like from your computer. They are not uploaded to a server (cropping is done in the browser).</p>
-            <p>If you have a low-memory device (eg. iPhone), you may wish to download a zip file after every 20 or so images.</p>
+        <button class="uk-button uk-button-primary uk-margin-left" type="button" tabindex="-1">Select Images</button>
+        <p class="uk-text-meta uk-margin-top">Select multiple images to crop. First image sets the template.</p>
+    </div>
 
-            <input type="file" id="files" multiple="" accept="image/*" v-on:change="updateFileQueue" />
-            <a v-if="sampleImages.length" href="#" v-on:click="addSampleImages" v-bind:style="{ opacity: sampleImagesLoaded() ? 0.4 : 1 }">Use sample images <span v-if="sampleImagesLoaded()" uk-icon="check"></span></a>
-
-            <div id="drophere" v-on:drop="dropFiles" v-on:dragover="dragOver" style="position: relative;">
-               <div></div>
-               <span style="position: absolute; width: 100%; top: 20px; left: 0; display: block; text-align: center;">
-                <span uk-icon="icon: image; ratio: 2"></span><br/>
-                Drop images here...
-               </span>
+    <!-- Main Editor Section -->
+    <div v-if="images.length > 0">
+        
+        <!-- Status Indicators -->
+        <div class="uk-margin-bottom">
+            <div class="image-counter">
+                Image {{ currentIndex + 1 }} of {{ images.length }}
             </div>
-            <div style="text-align: center;">
-              {{ fileQueue.length }} images ready for cropping.
+            
+            <!-- Template Status -->
+            <div v-if="currentIndex === 0 && !templateSet" class="uk-alert-primary" uk-alert>
+                <p><strong>Template Mode:</strong> Adjust the crop area on this first image, then click "Set as Template"</p>
+            </div>
+            
+            <div v-if="currentIndex === 0 && templateSet" class="template-indicator">
+                ✓ Template Set - Crop position locked
+            </div>
+            
+            <!-- Locked Mode Indicator -->
+            <div v-if="currentIndex > 0 && templateSet" class="locked-indicator">
+                🔒 View Only Mode - Using template crop position ({{ templateCropData.width.toFixed(0) }}×{{ templateCropData.height.toFixed(0) }}px at X:{{ templateCropData.x.toFixed(0) }}, Y:{{ templateCropData.y.toFixed(0) }})
+            </div>
+            
+            <div v-if="currentIndex > 0 && !templateSet" class="uk-alert-warning" uk-alert>
+                <p>Please set the template on the first image before proceeding</p>
+            </div>
+            
+            <!-- Validation Error -->
+            <div v-if="validationError" class="validation-error">
+                {{ validationError }}
             </div>
         </div>
-    
-        <div class="uk-card-footer">
-          <span v-if="haveImages()" class="uk-badge uk-label uk-label-success"><span uk-icon="check"></span> Success: Scroll down</span>
-        </div>
-    </div>
 
-    <div class="uk-card uk-card-body uk-card-default uk-card-small uk-margin-top">
-        <div v-if="isValidSize()"  class="uk-card-badge uk-label uk-label-success"><span uk-icon="check"></span> Success: Scroll down</div>
-        <div v-if="!isValidSize()" class="uk-card-badge uk-label uk-label-danger"><span uk-icon="lock"></span> Required</div>
-    
-        <div class="uk-card-header">
-          <h2 class="uk-card-title">2. Select desired width and height</h2>
-        </div>
-    
-        <div class="uk-card-body">
-          <p>Here you can select the desired size of your images (eg. 1200 by 1000 pixels).</p>
-
-          <ul style="list-style-type: none;">
-            <li><input type="radio" name="sizeMode" v-model="sizeMode" value="atMost"/> Resize to at most the given width and height (may be smaller)</li>
-            <li><input type="radio" name="sizeMode" v-model="sizeMode" value="exact"/> Resize to exactly the given width and height (may need to upsize)</li>
-            <li><input type="radio" name="sizeMode" v-model="sizeMode" value="largeAsPossible"/> Keep the size of the selected crop (large as possible)</li>
-          </ul>
-          <input type="text" class="uk-input" placeholder="Desired width" v-model="width" v-bind:disabled="sizeMode === 'largeAsPossible'" />
-          <input type="text" class="uk-input" placeholder="Desired height" v-model="height" v-bind:disabled="sizeMode === 'largeAsPossible'" />
-        </div>
-    
-        <div class="uk-card-footer">
-          <span v-if="isValidSize()" class="uk-badge uk-label uk-label-success"><span uk-icon="check"></span> Success: Scroll down</span>
-          <span v-if="!isValidSize()" class="uk-badge uk-label uk-label-danger"><span uk-icon="warning"></span> Invalid size</span>
-        </div>
-    </div>
-
-    <div v-show="sizeMode === 'largeAsPossible'" class="uk-card uk-card-body uk-card-default uk-card-small uk-margin-top">
-        <div v-if="isValidAspectRatio()"  class="uk-card-badge uk-label uk-label-success"><span uk-icon="check"></span> Success: Scroll down</div>
-        <div v-if="!isValidAspectRatio()" class="uk-card-badge uk-label uk-label-danger"><span uk-icon="lock"></span> Required</div>
-    
-        <div class="uk-card-header">
-          <h2 class="uk-card-title">3. Select target aspect ratio for images</h2>
-        </div>
-    
-        <div class="uk-card-body">
-          <p>Here you can select your desired aspect ratio. Common aspect ratios are 1:1 (square), 4:3 and 16:10.</p>
-          <p>If you have a desired width and height for your images you can enter that here (eg. 1000 by 800).</p>
-
-          <input type="text" placeholder="Aspect ratio width" v-model="aspectRatioWidth" size="5" />
-          <strong>:</strong>
-          <input type="text" placeholder="Aspect ratio height" v-model="aspectRatioHeight" size="5" />
-        </div>
-    
-        <div class="uk-card-footer">
-          <span v-if="isValidAspectRatio()" class="uk-badge uk-label uk-label-success"><span uk-icon="check"></span> Success: Scroll down</span>
-          <span v-if="!isValidAspectRatio()" class="uk-badge uk-label uk-label-danger"><span uk-icon="warning"></span> Invalid aspect ratio</span>
-        </div>
-    </div>
-
-    <div class="uk-card uk-card-body uk-card-default uk-card-small uk-margin-top">
-        <div class="uk-card-badge uk-label uk-label-danger"><span uk-icon="lock"></span> Required</div>
-    
-        <div class="uk-card-header">
-          <h2 class="uk-card-title">Select cropping mask for {{ fileQueue.length }} images
-            <div uk-spinner v-if="inProgress"></div>
-          </h2>
-        </div>
-    
-        <div class="uk-card-body">
-          <div id="controls">
-            <div><button class="uk-button uk-button-primary" v-on:click="nextImage(1)" v-bind:disabled="!isHaveNext()"><span uk-icon="arrow-right"></span> {{ imageIndex === -1 ? 'Start' : 'Next Image' }}</button></div>
-            <div><button class="uk-button uk-button-primary" v-on:click="prevImage()" v-bind:disabled="!isHavePrev()"><span uk-icon="arrow-left"></span> Back</button></div>
-            <div style="padding: 0 8px; vertical-align: top; border-left: 1px solid white;" v-if="imageIndex !== -1">
-              <div><strong>{{ fileQueue[imageIndex].fileName }}</strong></div>
-              <div>Crop size: {{ cropWidth }} x {{ cropHeight }}</div>
+        <!-- Image Display Area -->
+        <div class="uk-grid uk-grid-match" uk-grid>
+            <div class="uk-width-3-4@m">
+                <div class="cropper-container" :class="{ 'template-set': currentIndex === 0 && templateSet }">
+                    <img id="image-to-crop" :src="currentImageUrl" alt="Image to crop">
+                </div>
             </div>
-            <div><button class="uk-button uk-button-primary" v-on:click="createZip()" v-bind:disabled="!isHaveFirst()"><span uk-icon="folder"></span> Create zip with {{ readyCount }} cropped images</button></div>
-            <div><a v-if="downloadUrl" v-bind:href="downloadUrl" download="cropped-images.zip" class="uk-button uk-button-primary"><span uk-icon="download"></span> Download zip</a></div>
-          </div>
-
-          <div id="image-cropper" style="max-height: 80vh; min-height: 80vh;">
-
-          </div>
-        </div>
-    
-        <div class="uk-card-footer" style="text-align: center;">
-            Based on <a href="https://github.com/danfickle/bulk-image-cropper">open-source bulk image cropper</a>.
+            
+            <!-- Controls Sidebar -->
+            <div class="uk-width-1-4@m">
+                <div class="controls-section">
+                    
+                    <!-- Template Controls (First Image Only) -->
+                    <div v-if="currentIndex === 0">
+                        <h4>Template Controls</h4>
+                        
+                        <div class="uk-margin">
+                            <label class="uk-form-label">Aspect Ratio</label>
+                            <select class="uk-select" v-model="aspectRatio" @change="updateAspectRatio">
+                                <option value="NaN">Free</option>
+                                <option value="1">1:1 (Square)</option>
+                                <option value="1.7777777777777777">16:9</option>
+                                <option value="1.3333333333333333">4:3</option>
+                                <option value="0.6666666666666666">2:3</option>
+                                <option value="0.5625">9:16</option>
+                            </select>
+                        </div>
+                        
+                        <button 
+                            class="uk-button uk-button-primary uk-width-1-1 uk-margin-small-bottom" 
+                            @click="setTemplate"
+                            :disabled="templateSet">
+                            {{ templateSet ? 'Template Set ✓' : 'Set as Template' }}
+                        </button>
+                        
+                        <button 
+                            v-if="templateSet"
+                            class="uk-button uk-button-secondary uk-width-1-1 uk-margin-small-bottom" 
+                            @click="resetTemplate">
+                            Reset Template
+                        </button>
+                    </div>
+                    
+                    <!-- Navigation Controls -->
+                    <div class="uk-margin-top">
+                        <h4>Navigation</h4>
+                        <div class="uk-button-group uk-width-1-1">
+                            <button 
+                                class="uk-button uk-button-default nav-button" 
+                                @click="prevImage"
+                                :disabled="currentIndex === 0">
+                                ← Previous
+                            </button>
+                            <button 
+                                class="uk-button uk-button-default nav-button" 
+                                @click="nextImage"
+                                :disabled="currentIndex === images.length - 1">
+                                Next →
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Action Buttons -->
+                    <div class="uk-margin-top">
+                        <h4>Actions</h4>
+                        <button 
+                            class="uk-button uk-button-danger uk-width-1-1 uk-margin-small-bottom" 
+                            @click="removeCurrentImage">
+                            Remove This Image
+                        </button>
+                        
+                        <button 
+                            class="uk-button uk-button-primary uk-width-1-1" 
+                            @click="processAllImages"
+                            :disabled="!templateSet || processing">
+                            {{ processing ? 'Processing...' : 'Crop All & Download ZIP' }}
+                        </button>
+                    </div>
+                    
+                    <!-- Image List -->
+                    <div class="uk-margin-top">
+                        <h4>Image List</h4>
+                        <ul class="uk-list uk-list-divider">
+                            <li 
+                                v-for="(img, idx) in images" 
+                                :key="idx"
+                                @click="goToImage(idx)"
+                                :class="{ 'uk-text-bold': idx === currentIndex, 'uk-text-success': idx === 0 && templateSet }"
+                                style="cursor: pointer;">
+                                {{ idx + 1 }}. {{ img.name }}
+                                <span v-if="idx === 0 && templateSet" class="uk-label uk-label-success">TEMPLATE</span>
+                                <span v-if="idx > 0 && templateSet" class="uk-label">locked</span>
+                            </li>
+                        </ul>
+                    </div>
+                    
+                </div>
+            </div>
         </div>
     </div>
 
+    <!-- Hidden Canvas for Processing -->
+    <canvas id="process-canvas" style="display: none;"></canvas>
 
+</div>
 
+<!-- Scripts -->
+<script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/uikit@3.16.26/dist/js/uikit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/uikit@3.16.26/dist/js/uikit-icons.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cropperjs@1.5.13/dist/cropper.min.js"></script>
 
+<script>
+new Vue({
+    el: '#app',
+    data: {
+        images: [],           // Array of { file, name, url, valid }
+        currentIndex: 0,      // Current image index
+        cropper: null,        // Cropper.js instance
+        aspectRatio: 'NaN',   // Current aspect ratio
+        templateSet: false,   // Whether template has been set
+        templateCropData: null, // { x, y, width, height } in pixels
+        processing: false,    // Whether currently processing
+        validationError: '',  // Current validation error message
+        processedImages: []   // Array of processed blobs
+    },
+    
+    computed: {
+        currentImage: function() {
+            return this.images[this.currentIndex] || null;
+        },
+        currentImageUrl: function() {
+            return this.currentImage ? this.currentImage.url : '';
+        }
+    },
+    
+    watch: {
+        currentIndex: function() {
+            this.$nextTick(() => {
+                this.initCropper();
+            });
+        }
+    },
+    
+    methods: {
+        // Handle file selection
+        handleFileSelect: function(event) {
+            var files = Array.from(event.target.files);
+            var self = this;
+            
+            files.forEach(function(file) {
+                if (!file.type.startsWith('image/')) return;
+                
+                var url = URL.createObjectURL(file);
+                self.images.push({
+                    file: file,
+                    name: file.name,
+                    url: url,
+                    valid: true
+                });
+            });
+            
+            // Initialize cropper for first image
+            if (this.images.length > 0) {
+                this.$nextTick(() => {
+                    this.initCropper();
+                });
+            }
+        },
+        
+        // Initialize or reinitialize cropper
+        initCropper: function() {
+            var self = this;
+            var image = document.getElementById('image-to-crop');
+            
+            if (!image) return;
+            
+            // Destroy existing cropper
+            if (this.cropper) {
+                this.cropper.destroy();
+                this.cropper = null;
+            }
+            
+            // Wait for image to load
+            if (!image.complete) {
+                image.onload = function() {
+                    self.setupCropper();
+                };
+            } else {
+                this.setupCropper();
+            }
+        },
+        
+        // Setup cropper with appropriate options
+        setupCropper: function() {
+            var self = this;
+            var image = document.getElementById('image-to-crop');
+            
+            if (!image) return;
+            
+            var options = {
+                viewMode: 1,        // Restrict to image bounds
+                dragMode: 'move',
+                autoCropArea: 0.8,
+                restore: false,
+                guides: true,
+                center: true,
+                highlight: false,
+                cropBoxMovable: true,
+                cropBoxResizable: true,
+                toggleDragModeOnDblclick: false,
+                ready: function() {
+                    // If template is set and we're not on first image, apply template
+                    if (self.templateSet && self.currentIndex > 0) {
+                        self.applyTemplateCrop();
+                    }
+                }
+            };
+            
+            // Set aspect ratio if specified
+            if (this.aspectRatio !== 'NaN') {
+                options.aspectRatio = parseFloat(this.aspectRatio);
+            }
+            
+            // Disable interaction for subsequent images when template is set
+            if (this.currentIndex > 0 && this.templateSet) {
+                options.cropBoxMovable = false;
+                options.cropBoxResizable = false;
+                options.dragMode = 'none';
+                options.toggleDragModeOnDblclick = false;
+            }
+            
+            this.cropper = new Cropper(image, options);
+        },
+        
+        // Set current crop as template
+        setTemplate: function() {
+            if (!this.cropper || this.currentIndex !== 0) return;
+            
+            var data = this.cropper.getData();
+            
+            // Validate crop data
+            if (data.width < 10 || data.height < 10) {
+                alert('Crop area too small. Please select a larger area.');
+                return;
+            }
+            
+            this.templateCropData = {
+                x: data.x,
+                y: data.y,
+                width: data.width,
+                height: data.height
+            };
+            
+            this.templateSet = true;
+            
+            // Reinitialize to lock the template image too
+            this.cropper.setData(this.templateCropData);
+            
+            // Disable further changes on template
+            this.cropper.setDragMode('none');
+            this.cropper.options.cropBoxMovable = false;
+            this.cropper.options.cropBoxResizable = false;
+            
+            alert('Template set! Crop position will be applied to all images.');
+        },
+        
+        // Reset template to allow changes
+        resetTemplate: function() {
+            if (!confirm('Reset template? You will need to set it again.')) return;
+            
+            this.templateSet = false;
+            this.templateCropData = null;
+            
+            // Reinitialize cropper to enable editing
+            this.initCropper();
+        },
+        
+        // Apply template crop to current image
+        applyTemplateCrop: function() {
+            if (!this.cropper || !this.templateCropData) return;
+            
+            var self = this;
+            var image = document.getElementById('image-to-crop');
+            
+            // Validate image size
+            if (image.naturalWidth < this.templateCropData.x + this.templateCropData.width ||
+                image.naturalHeight < this.templateCropData.y + this.templateCropData.height) {
+                
+                this.validationError = 'Image too small for template crop area! ' +
+                    'Need ' + this.templateCropData.width.toFixed(0) + '×' + this.templateCropData.height.toFixed(0) + 
+                    ', got ' + image.naturalWidth + '×' + image.naturalHeight;
+                
+                this.currentImage.valid = false;
+                return;
+            } else {
+                this.validationError = '';
+                this.currentImage.valid = true;
+            }
+            
+            // Apply template data
+            this.cropper.setData(this.templateCropData);
+            
+            // Ensure crop box is not movable/resizable
+            this.cropper.setDragMode('none');
+        },
+        
+        // Update aspect ratio
+        updateAspectRatio: function() {
+            if (!this.cropper) return;
+            
+            var ratio = this.aspectRatio === 'NaN' ? NaN : parseFloat(this.aspectRatio);
+            this.cropper.setAspectRatio(ratio);
+        },
+        
+        // Navigation
+        nextImage: function() {
+            if (this.currentIndex < this.images.length - 1) {
+                this.currentIndex++;
+            }
+        },
+        
+        prevImage: function() {
+            if (this.currentIndex > 0) {
+                this.currentIndex--;
+            }
+        },
+        
+        goToImage: function(index) {
+            if (index >= 0 && index < this.images.length) {
+                // Check if template is set before allowing navigation away from first image
+                if (this.currentIndex === 0 && !this.templateSet && index > 0) {
+                    alert('Please set the template on the first image before viewing other images.');
+                    return;
+                }
+                this.currentIndex = index;
+            }
+        },
+        
+        // Remove current image
+        removeCurrentImage: function() {
+            if (!confirm('Remove this image from the list?')) return;
+            
+            // Revoke object URL to free memory
+            URL.revokeObjectURL(this.currentImage.url);
+            
+            this.images.splice(this.currentIndex, 1);
+            
+            if (this.currentIndex >= this.images.length) {
+                this.currentIndex = Math.max(0, this.images.length - 1);
+            }
+            
+            if (this.images.length === 0) {
+                this.templateSet = false;
+                this.templateCropData = null;
+            }
+        },
+        
+        // Process all images and create ZIP
+        processAllImages: function() {
+            if (!this.templateSet) {
+                alert('Please set a template first!');
+                return;
+            }
+            
+            // Check for invalid images
+            var invalidImages = this.images.filter(function(img, idx) { 
+                return idx > 0 && !img.valid; 
+            });
+            
+            if (invalidImages.length > 0) {
+                alert('Some images are too small for the template crop area. Please remove them or reset the template.');
+                return;
+            }
+            
+            this.processing = true;
+            this.processedImages = [];
+            
+            var self = this;
+            var canvas = document.getElementById('process-canvas');
+            var ctx = canvas.getContext('2d');
+            
+            // Process each image
+            var processNext = function(index) {
+                if (index >= self.images.length) {
+                    // All done, create ZIP
+                    self.createZip();
+                    return;
+                }
+                
+                var img = self.images[index];
+                var imageObj = new Image();
+                
+                imageObj.onload = function() {
+                    // Set canvas size to crop size
+                    canvas.width = self.templateCropData.width;
+                    canvas.height = self.templateCropData.height;
+                    
+                    // Draw cropped region
+                    ctx.drawImage(
+                        imageObj,
+                        self.templateCropData.x,
+                        self.templateCropData.y,
+                        self.templateCropData.width,
+                        self.templateCropData.height,
+                        0,
+                        0,
+                        self.templateCropData.width,
+                        self.templateCropData.height
+                    );
+                    
+                    // Convert to blob
+                    canvas.toBlob(function(blob) {
+                        self.processedImages.push({
+                            name: 'cropped_' + img.name,
+                            blob: blob,
+                            originalName: img.name
+                        });
+                        
+                        // Process next
+                        processNext(index + 1);
+                    }, 'image/jpeg', 0.95);
+                };
+                
+                imageObj.src = img.url;
+            };
+            
+            // Start processing
+            processNext(0);
+        },
+        
+        // Create and download ZIP using Web Worker
+        createZip: function() {
+            var self = this;
+            
+            // Create worker from inline code
+            var workerScript = document.getElementById('zip-worker-code').textContent;
+            var blob = new Blob([workerScript], { type: 'text/javascript' });
+            var workerUrl = URL.createObjectURL(blob);
+            
+            var worker = new Worker(workerUrl);
+            
+            worker.onmessage = function(e) {
+                var zipBlob = new Blob([e.data.zip], { type: 'application/zip' });
+                var url = URL.createObjectURL(zipBlob);
+                
+                // Trigger download
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = 'cropped_images.zip';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                
+                URL.revokeObjectURL(url);
+                URL.revokeObjectURL(workerUrl);
+                
+                self.processing = false;
+                
+                alert('Download started! Cropped ' + self.processedImages.length + ' images.');
+            };
+            
+            // Send files to worker
+            worker.postMessage(this.processedImages);
+        }
+    },
+    
+    beforeDestroy: function() {
+        // Clean up object URLs
+        this.images.forEach(function(img) {
+            URL.revokeObjectURL(img.url);
+        });
+        
+        if (this.cropper) {
+            this.cropper.destroy();
+        }
+    }
+});
+</script>
 
+<!-- Inline Web Worker Code -->
+<script id="zip-worker-code" type="text/js-worker">
+function Stream(byteLength, littleEndian) {
+    var instance = this;
+    this._array = new ArrayBuffer(byteLength);
+    this._view = new DataView(this._array, 0, byteLength);
+    this._capacity = byteLength;
+    this._length = 0;
+    this._le = littleEndian;
 
+    this._resize = function(extraCapacity) {
+        if (instance._capacity >= instance._length + extraCapacity) {
+            return;
+        }
 
-  </div>
-  <!-- TODO: Cookie notice if required. -->
+        var newCapacity = instance._capacity * 2;
+        while (newCapacity < instance._length + extraCapacity) {
+            newCapacity *= 2;
+        }
+
+        var newArray = new ArrayBuffer(newCapacity);
+        var newView = new DataView(newArray, 0, newCapacity);
+        for (var i = 0; i < instance._length; i++) {
+            newView.setUint8(i, instance._view.getUint8(i));
+        }
+        instance._array = newArray;
+        instance._view = newView;
+        instance._capacity = newCapacity;
+    };
+
+    this.writeUint8 = function(byte) {
+        instance._resize(1);
+        instance._view.setUint8(instance._length, byte);
+        instance._length++;
+    };
+
+    this.writeUint16 = function(uint16) {
+        instance._resize(2);
+        instance._view.setUint16(instance._length, uint16, instance._le);
+        instance._length += 2;
+    };
+
+    this.writeUint32 = function(uint32) {
+        instance._resize(4);
+        instance._view.setUint32(instance._length, uint32, instance._le);
+        instance._length += 4;
+    };
+
+    this.writeUint8Array = function(arr) {
+        instance._resize(arr.length);
+        for (var i = 0; i < arr.length; i++) {
+            instance._view.setUint8(instance._length, arr[i], instance._le);
+            instance._length++;
+        }
+    };
+
+    this.finalize = function() {
+        var newArray = new ArrayBuffer(instance._length);
+        var newView = new DataView(newArray, 0, instance._length);
+
+        for (var i = 0; i < instance._length; i++) {
+            newView.setUint8(i, instance._view.getUint8(i));
+        }
+
+        return newArray;
+    }
+}
+
+function makeTable() {
+    var c, table = [];
+
+    for(var n =0; n < 256; n++){
+        c = n;
+        for(var k =0; k < 8; k++){
+            c = ((c&1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
+        }
+        table[n] = c;
+    }
+
+    return table;
+}
+
+var crcTable = makeTable();
+
+function crc32(crc, buf, len, pos) {
+    var t = crcTable, end = pos + len;
+    crc = crc ^ (-1);
+
+    for (var i = pos; i < end; i++ ) {
+        crc = (crc >>> 8) ^ t[(crc ^ buf[i]) & 0xFF];
+    }
+
+    return (crc ^ (-1));
+}
+
+function calcCrc32(ab) {
+    return crc32(0, new Uint8Array(ab, 0, ab.byteLength), ab.byteLength, 0);
+}
+
+function toUTF8Array(str) {
+    var utf8 = [];
+    for (var i=0; i < str.length; i++) {
+        var charcode = str.charCodeAt(i);
+        if (charcode < 0x80) utf8.push(charcode);
+        else if (charcode < 0x800) {
+            utf8.push(0xc0 | (charcode >> 6),
+            0x80 | (charcode & 0x3f));
+        }
+        else if (charcode < 0xd800 || charcode >= 0xe000) {
+            utf8.push(0xe0 | (charcode >> 12),
+            0x80 | ((charcode>>6) & 0x3f),
+            0x80 | (charcode & 0x3f));
+        }
+        else {
+            i++;
+            charcode = 0x10000 + (((charcode & 0x3ff)<<10)
+            | (str.charCodeAt(i) & 0x3ff))
+            utf8.push(0xf0 | (charcode >>18),
+            0x80 | ((charcode>>12) & 0x3f),
+            0x80 | ((charcode>>6) & 0x3f),
+            0x80 | (charcode & 0x3f));
+        }
+    }
+    return utf8;
+}
+
+function createZip(fileQueue) {
+    var zip = new Stream(128000, true);
+    var date = new Date();
+
+    var dosTime = date.getHours();
+    dosTime = dosTime << 6;
+    dosTime = dosTime | date.getMinutes();
+    dosTime = dosTime << 5;
+    dosTime = dosTime | date.getSeconds() / 2;
+
+    var dosDate = date.getFullYear() - 1980;
+    dosDate = dosDate << 4;
+    dosDate = dosDate | (date.getMonth() + 1);
+    dosDate = dosDate << 5;
+    dosDate = dosDate | date.getDate();
+
+    for (var i = 0; i < fileQueue.length; i++) {
+        fileQueue[i].offset = zip._length;
+
+        zip.writeUint8Array([0x50, 0x4b, 0x03, 0x04]);
+        zip.writeUint16(0x0014);
+        zip.writeUint16(0x0800);
+        zip.writeUint16(0x00);
+        zip.writeUint16(dosTime);
+        zip.writeUint16(dosDate);
+        zip.writeUint32(fileQueue[i].crc);
+        zip.writeUint32(fileQueue[i].buffer.byteLength);
+        zip.writeUint32(fileQueue[i].buffer.byteLength);
+
+        var utf8 = toUTF8Array(fileQueue[i].name);
+        zip.writeUint16(utf8.length);
+        zip.writeUint16(0x00);
+        zip.writeUint8Array(utf8);
+
+        var src = new Uint8Array(fileQueue[i].buffer, 0, fileQueue[i].buffer.byteLength);
+        var srclen = fileQueue[i].buffer.byteLength;
+
+        for (var j = 0; j < srclen; j++) {
+            zip.writeUint8(src[j]);
+        }
+    }
+
+    var centralDirectoryOffset = zip._length;
+
+    for (var k = 0; k < fileQueue.length; k++) {
+        zip.writeUint8Array([0x50, 0x4b, 0x01, 0x02]);
+        zip.writeUint16(0x0014);
+        zip.writeUint16(0x00A0);
+        zip.writeUint16(0x0800);
+        zip.writeUint16(0x00);
+        zip.writeUint16(dosTime);
+        zip.writeUint16(dosDate);
+        zip.writeUint32(fileQueue[k].crc);
+        zip.writeUint32(fileQueue[k].buffer.byteLength);
+        zip.writeUint32(fileQueue[k].buffer.byteLength);
+
+        var utf8c = toUTF8Array(fileQueue[k].name);
+        zip.writeUint16(utf8c.length);
+        zip.writeUint16(0x00);
+        zip.writeUint16(0x00);
+        zip.writeUint16(0x00);
+        zip.writeUint16(0x00);
+        zip.writeUint32(0x00);
+        zip.writeUint32(fileQueue[k].offset);
+        zip.writeUint8Array(utf8c);
+    }
+
+    var endCentralDirectory = zip._length;
+
+    zip.writeUint8Array([0x50, 0x4b, 0x05, 0x06]);
+    zip.writeUint16(0x00);
+    zip.writeUint16(0x00);
+    zip.writeUint16(fileQueue.length);
+    zip.writeUint16(fileQueue.length);
+    zip.writeUint32(endCentralDirectory - centralDirectoryOffset);
+    zip.writeUint32(centralDirectoryOffset);
+    zip.writeUint16(0x00);
+
+    var zipBuffer = zip.finalize();
+    postMessage({ zip: zipBuffer });
+}
+
+onmessage = function(e) {
+    var fileQueue = e.data;
+
+    if (fileQueue.length === 0) {
+        return;
+    }
+
+    var idx = 0;
+    var fr = new FileReader();
+
+    fr.onload = function(e) {
+        fileQueue[idx].buffer = e.target.result;
+        fileQueue[idx].crc = calcCrc32(fileQueue[idx].buffer);
+        idx++;
+        if (idx >= fileQueue.length) {
+            createZip(fileQueue);
+        } else {
+            fr.readAsArrayBuffer(fileQueue[idx].blob);
+        }
+    };
+
+    fr.readAsArrayBuffer(fileQueue[0].blob);
+};
+</script>
+
 </body>
 </html>
